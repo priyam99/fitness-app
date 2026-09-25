@@ -211,6 +211,99 @@ fixed structure; MongoDB lets every document define its own structure.
 
 ---
 
+## Activity Service — Synchronous Call to User Service (RestClient)
+
+**Q: What actual HTTP request does `UserValidationService.validateUser()`
+send?**
+A: `GET http://localhost:8081/api/users/{id}` — base URL from
+`application.yml`'s `user-service.url` (via `@Value`), path from
+`.uri("/api/users/{id}", userId)`. Lands on the real running
+`UserController.getUserById()` in User Service.
+
+**Q: Why catch `HttpClientErrorException.NotFound` but originally miss
+the "service completely down" case?**
+A: `.NotFound` only fires when User Service responds with a real 404 —
+i.e. it's up and says "no such user." If User Service isn't running at
+all, the connection itself fails with `ResourceAccessException` instead
+— a different exception type our original catch block didn't handle, so
+it went uncaught and crashed the request.
+
+**Q: Why not just return `false` for both "confirmed missing" and
+"couldn't check" cases?**
+A: `false` should mean "verified: this user doesn't exist." If User
+Service is just unreachable, we don't actually know — returning `false`
+anyway would falsely tell real users their account doesn't exist during
+an outage. Fixed by re-throwing a distinct `IllegalStateException` for
+the unreachable case instead, later mapped to 503 (vs 404 for a
+genuinely confirmed-missing user).
+
+**Q: Full request trace for POST /api/activities (client → saved
+document)?**
+A: Controller (`@Valid` triggers) → `ActivityService.createActivity()` →
+`UserValidationService.validateUser()` sends a real GET to User Service
+→ User Service's own Controller→Service→Repository→Postgres chain runs
+→ response (200 or 404) returns to Activity Service → if valid, build
+`Activity`, `activityRepository.save()` → MongoDB assigns ObjectId,
+auto-creates `fitness_activity_db` on first write → `toResponse()` →
+back through Controller → client.
+
+---
+
+## MongoDB Document vs JPA Entity
+
+**Q: Why no `@GeneratedValue` for MongoDB's `id`?**
+A: MongoDB self-generates a unique `ObjectId` (timestamp + machine +
+random bits), no central counting needed — unlike Postgres
+auto-increment, which needs one authority handing out sequential
+numbers. `id` is just `String`, MongoDB fills it in itself.
+
+**Q: Can two documents in the same collection have different fields?**
+A: Yes, no error — that's what "flexible schema" means. Postgres = every
+row must match one fixed set of columns. MongoDB = every document can
+have its own fields, even in the same collection.
+
+---
+
+## Docker Desktop restart / container persistence (live-verified)
+
+**Q: After a Docker Desktop restart, was container data still there?**
+A: Yes — `docker ps -a` showed the same container ID as before ("Exited"
+status), and `docker start mongodb` resumed the *same* container, not a
+fresh one. Confirms: stopping the app/Docker Desktop ≠ losing data;
+only deleting the container would.
+
+---
+
+## Global Exception Handling (`@RestControllerAdvice`)
+
+**Q: Why does each service need its own `@RestControllerAdvice`, not one
+shared one?**
+A: Direct consequence of Concept 1 — microservices are separate
+codebases/JARs/processes with no shared runtime. Each service is fully
+self-contained; the only connection between them is network calls, so
+each must define its own error handling.
+
+**Q: Why create custom exception types (`UserNotFoundException`,
+`EmailAlreadyExistsException`) instead of throwing generic
+`IllegalArgumentException` everywhere?**
+A: A generic exception carries no meaning about *what kind* of business
+error occurred, so Spring can't map it to a specific status code —
+everything falls back to a generic 500. Custom, distinctly-typed
+exceptions let `@ExceptionHandler` match on type and return the correct
+code: 404 (not found), 409 (already exists), 503 (dependency
+unreachable) — verified live: `userId: "99"` went from 500 to a clean
+404 once this was wired up.
+
+**Q: Deliberate scope decision — why no DELETE endpoints for User/
+Activity?**
+A: Never used anywhere in the actual app flow (login → view activities
+→ add activity → view AI recommendation) or in the course transcript.
+Skipped deliberately to stay focused on the core flow given the time
+budget — a scoping choice, not a gap, and worth stating as such in an
+interview.
+
+---
+
 ## Open / Not Yet Answered
 
 - Why might AI Service specifically benefit from an interface +
