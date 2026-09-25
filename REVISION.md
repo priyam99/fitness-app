@@ -304,6 +304,81 @@ interview.
 
 ---
 
+## Eureka — Service Discovery
+
+**Q: Eureka Server vs Eureka Client — what's the actual distinction?**
+A: Eureka Server = a separate Spring Boot app whose only job is tracking
+"who's registered, and where" (the registry itself). Eureka Client = a
+dependency added to every OTHER service that makes them register with
+the server on startup and lets them look other services up. Common
+interview trip-up: Eureka isn't "one thing" — there's a registry and
+there are clients.
+
+**Q: Why does Eureka Server need `register-with-eureka: false` /
+`fetch-registry: false`?**
+A: The Eureka Server dependency bundles Eureka Client behavior too —
+without this, the server would try to register with (and fetch from)
+itself, which is circular and pointless. These flags say "you're the
+registry, don't also act like a client of yourself."
+
+**Q: Does having `spring.application.name: eureka-server` mean Eureka
+Server appears in its own registry?**
+A: No — having a name and registering are separate steps.
+`register-with-eureka: false` blocks the registration step regardless
+of the app having a name.
+
+**Q: What's `@LoadBalanced` on a `RestClient.Builder` actually do?**
+A: Marks that builder so any request built from it resolves the "host"
+as a Eureka service NAME (e.g. `http://user-service`) instead of a real
+address — Spring intercepts the call, asks Eureka where that service
+actually is, and swaps in the real address transparently.
+
+**Q: If Eureka Server goes down, does Activity Service → User Service
+communication still work?**
+A: No. `http://user-service` isn't a real address — something (Eureka)
+has to translate the name into a real one at request time. No registry
+reachable → no translation → the call fails, even if User Service
+itself is running fine. This is a real tradeoff: removed the hardcoded-
+URL fragility, introduced a new dependency on the registry being up
+(mitigated in production with a Eureka cluster, not just one instance).
+
+**Q: Live-verified bug — `@LoadBalanced RestClient.Builder` +
+Eureka Client together crashed Activity Service on startup
+(`BeanCurrentlyInCreationException` / circular reference on
+`scopedTarget.eurekaClient`). What was the actual cause?**
+A: Confirmed via [spring-cloud-netflix#4382](https://github.com/spring-cloud/spring-cloud-netflix/issues/4382):
+newer Spring Cloud versions have Eureka's OWN internal HTTP client also
+built on `RestClient`. If the app defines its own `@LoadBalanced
+RestClient.Builder` bean, Spring's internal Eureka registration code can
+end up wired to THAT bean instead of a plain one — creating a circular
+dependency (the load balancer needs Eureka to resolve names, but Eureka
+registration needs the load-balanced client to register). User Service
+never hit this because it never defines a `@LoadBalanced` bean — only
+services that BOTH register with Eureka AND make outbound load-balanced
+calls are exposed to it.
+
+**Q: How was it fixed?**
+A: Replaced `@LoadBalanced RestClient.Builder` with a direct
+`DiscoveryClient` lookup: explicitly call
+`discoveryClient.getInstances("user-service")`, take the first
+instance's real URI, and build a plain (non-load-balanced) `RestClient`
+against it manually. Sidesteps the collision entirely since nothing is
+marked `@LoadBalanced` anymore — more manual, but avoids the known
+framework bug. A legitimate, production-valid alternative pattern, not
+a hack.
+
+**Q: What's the actual debugging lesson here?**
+A: When a stack trace shows a circular/currently-in-creation bean
+exception right after adding a new bean, suspect a framework-level
+wiring collision, not necessarily your own logic. Verify against the
+framework's own issue tracker before guessing at config fixes — don't
+apply unverified property names (`eureka.client.restclient.enabled`
+was tried and was wrong; the IDE's "unknown property" warning caught it
+immediately, which is a good signal to stop and verify rather than
+keep guessing).
+
+---
+
 ## Open / Not Yet Answered
 
 - Why might AI Service specifically benefit from an interface +
