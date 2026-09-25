@@ -4,6 +4,8 @@ server:
 spring:
   application:
     name: user-service
+  profiles:
+    active: local
 
   datasource:
     url: jdbc:postgresql://localhost:5432/fitness_user_db

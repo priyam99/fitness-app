@@ -2,6 +2,8 @@ package com.fitness.userservice.service;
 
 import com.fitness.userservice.dto.RegisterRequest;
 import com.fitness.userservice.dto.UserResponse;
+import com.fitness.userservice.exception.EmailAlreadyExistsException;
+import com.fitness.userservice.exception.UserNotFoundException;
 import com.fitness.userservice.model.User;
 import com.fitness.userservice.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -18,7 +20,7 @@ public class UserService {
     public UserResponse register(RegisterRequest request) {
 
         if (userRepository.existsByEmail(request.getEmail())) {
-            throw new IllegalArgumentException("Email already registered");
+            throw new EmailAlreadyExistsException("Email already registered: " + request.getEmail());
         }
 
         User user = new User();
@@ -34,7 +36,7 @@ public class UserService {
 
     public UserResponse getUserById(Long id) {
         User user = userRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+                .orElseThrow(() -> new UserNotFoundException("User not found with id: " + id));
 
         return toResponse(user);
     }

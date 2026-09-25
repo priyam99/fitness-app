@@ -2,6 +2,7 @@ package com.fitness.activityservice.service;
 
 import com.fitness.activityservice.dto.ActivityRequest;
 import com.fitness.activityservice.dto.ActivityResponse;
+import com.fitness.activityservice.exception.UserNotFoundException;
 import com.fitness.activityservice.model.Activity;
 import com.fitness.activityservice.repository.ActivityRepository;
 import lombok.RequiredArgsConstructor;
@@ -19,7 +20,7 @@ public class ActivityService {
     public ActivityResponse createActivity(ActivityRequest request) {
         boolean userExists = userValidationService.validateUser(request.getUserId());
         if (!userExists) {
-            throw new IllegalArgumentException("User not found: " + request.getUserId());
+            throw new UserNotFoundException("User not found: " + request.getUserId());
         }
 
         Activity activity = new Activity();
