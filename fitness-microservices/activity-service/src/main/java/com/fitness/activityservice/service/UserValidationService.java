@@ -12,24 +12,21 @@ import java.util.List;
 @Service
 public class UserValidationService {
 
+    private static final String USER_SERVICE_NAME = "user-service";
+
     private final DiscoveryClient discoveryClient;
-    private final RestClient.Builder restClientBuilder;
+    private final RestClient restClient;
 
     public UserValidationService(DiscoveryClient discoveryClient, RestClient.Builder restClientBuilder) {
         this.discoveryClient = discoveryClient;
-        this.restClientBuilder = restClientBuilder;
+        this.restClient = restClientBuilder.build();
     }
 
     public boolean validateUser(String userId) {
-        List<ServiceInstance> instances = discoveryClient.getInstances("user-service");
-        if (instances.isEmpty()) {
-            throw new IllegalStateException("No instances available for user-service");
-        }
-        String baseUrl = instances.get(0).getUri().toString();
+        String baseUrl = resolveUserServiceUrl();
 
         try {
-            restClientBuilder.build()
-                    .get()
+            restClient.get()
                     .uri(baseUrl + "/api/users/{id}", userId)
                     .retrieve()
                     .toBodilessEntity();
@@ -39,5 +36,13 @@ public class UserValidationService {
         } catch (ResourceAccessException e) {
             throw new IllegalStateException("User Service is unavailable, cannot validate user", e);
         }
+    }
+
+    private String resolveUserServiceUrl() {
+        List<ServiceInstance> instances = discoveryClient.getInstances(USER_SERVICE_NAME);
+        if (instances.isEmpty()) {
+            throw new IllegalStateException("No instances available for " + USER_SERVICE_NAME);
+        }
+        return instances.get(0).getUri().toString();
     }
 }
