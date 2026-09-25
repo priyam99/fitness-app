@@ -411,9 +411,12 @@ explicit `routes:` entries instead (`Path=/api/users/**` ->
 `lb://user-service`, `Path=/api/activities/**` -> `lb://activity-service`)
 — more predictable and matches the transcript's explicit routing table.
 
-Status: api-gateway module scaffolded (package renamed from the
-Initializr default `api_gateway` to `apigateway`, matching every other
-service), `application.yml` routes written, not yet run/tested end to end.
+Status: VERIFIED working end to end. `GET http://localhost:8080/api/users/1`
+and `POST http://localhost:8080/api/activities` both succeeded routed
+through the Gateway — client -> Gateway (8080) -> Eureka-resolved route ->
+correct microservice -> correct database, for both services. Full
+architecture (User Service, Activity Service, Eureka, Gateway) now
+confirmed working together.
 
 ---
 
@@ -422,7 +425,3 @@ service), `application.yml` routes written, not yet run/tested end to end.
 - Why might AI Service specifically benefit from an interface +
   multiple implementations later (e.g. swapping Gemini for another
   model)? — seeded, not yet resolved.
-- API Gateway: not yet verified to actually start and route correctly —
-  test `GET http://localhost:8080/api/users/{id}` and
-  `POST http://localhost:8080/api/activities` through the Gateway next
-  session.
