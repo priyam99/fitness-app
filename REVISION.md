@@ -420,6 +420,29 @@ confirmed working together.
 
 ---
 
+## Config Server (conceptual only — not built)
+
+**Q: What is Spring Cloud Config Server and why use it?**
+A: A separate small app whose only job is serving configuration to other
+services (typically backed by a Git repo), instead of each service
+keeping its own local `application.yml` in isolation. Centralizes shared
+config (DB URLs, Eureka address, etc.) so changes happen in one place,
+version-controlled, instead of drifting across N separate files.
+
+**Q: Where does it sit in the architecture?**
+A: Off to the side like Eureka — not on the direct request path, but a
+dependency every other service needs at startup to fetch its config.
+
+**Decision**: deliberately skipped hands-on implementation given the time
+budget — the practical benefit is small at 4-service scale, and the
+concept (fetch-config-at-startup from a central source) is the same
+pattern already demonstrated hands-on with Eureka. Answer for an
+interview: "centralize config with a Config Server backed by Git — one
+source of truth, environment-specific overrides, no drift, no rebuild
+needed to change config."
+
+---
+
 ## Open / Not Yet Answered
 
 - Why might AI Service specifically benefit from an interface +
