@@ -379,8 +379,50 @@ keep guessing).
 
 ---
 
+## API Gateway (scaffolded, config written, not yet tested)
+
+**Q: Reactive vs Servlet-based Gateway — which did we pick and why?**
+A: Reactive Gateway (`spring-cloud-starter-gateway-server-webflux`, built
+on WebFlux) — the traditional, long-established, well-documented Spring
+Cloud Gateway. A newer non-reactive "Gateway" variant now also exists on
+Initializr, but is less mature/documented and less likely to match
+standard tutorials.
+
+**Q: Trace `GET http://localhost:8080/api/users/1` through the Gateway.**
+A: Request hits Gateway (8080) -> matches route predicate `Path=/api/users/**`
+-> that route's `uri: lb://user-service` triggers a Eureka lookup for
+`user-service` -> Eureka returns the real address (`localhost:8081`) ->
+Gateway forwards the same path to that real address -> User Service's
+normal Controller/Service/Repository chain runs, unaware it went through
+a Gateway -> response flows back through the Gateway to the client.
+
+**Q: Why does the Gateway still need the Eureka Client dependency even
+though `lb://user-service` is already written in config?**
+A: `lb://` is just config text saying "resolve this via load balancing."
+It doesn't by itself know how to resolve anything — that resolution
+requires an active Eureka registry connection, which only exists because
+of the Eureka Client dependency. Without it, `lb://user-service` has no
+mechanism behind it and requests would fail.
+
+**Q: What does `discovery.locator.enabled: false` do, and why set it?**
+A: Spring Cloud Gateway can auto-generate routes from whatever's
+registered in Eureka, with no explicit rules. We disabled that and wrote
+explicit `routes:` entries instead (`Path=/api/users/**` ->
+`lb://user-service`, `Path=/api/activities/**` -> `lb://activity-service`)
+— more predictable and matches the transcript's explicit routing table.
+
+Status: api-gateway module scaffolded (package renamed from the
+Initializr default `api_gateway` to `apigateway`, matching every other
+service), `application.yml` routes written, not yet run/tested end to end.
+
+---
+
 ## Open / Not Yet Answered
 
 - Why might AI Service specifically benefit from an interface +
   multiple implementations later (e.g. swapping Gemini for another
   model)? — seeded, not yet resolved.
+- API Gateway: not yet verified to actually start and route correctly —
+  test `GET http://localhost:8080/api/users/{id}` and
+  `POST http://localhost:8080/api/activities` through the Gateway next
+  session.
