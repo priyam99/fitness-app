@@ -2,6 +2,8 @@ package com.fitness.activityservice.service;
 
 import com.fitness.activityservice.dto.ActivityRequest;
 import com.fitness.activityservice.dto.ActivityResponse;
+import com.fitness.activityservice.event.ActivityEvent;
+import com.fitness.activityservice.event.ActivityEventProducer;
 import com.fitness.activityservice.exception.UserNotFoundException;
 import com.fitness.activityservice.model.Activity;
 import com.fitness.activityservice.repository.ActivityRepository;
@@ -9,6 +11,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Service
 @RequiredArgsConstructor
@@ -16,6 +19,7 @@ public class ActivityService {
 
     private final ActivityRepository activityRepository;
     private final UserValidationService userValidationService;
+    private final ActivityEventProducer activityEventProducer;
 
     public ActivityResponse createActivity(ActivityRequest request) {
         boolean userExists = userValidationService.validateUser(request.getUserId());
@@ -32,7 +36,27 @@ public class ActivityService {
 
         Activity savedActivity = activityRepository.save(activity);
 
+        publishActivityEvent(savedActivity);
+
         return toResponse(savedActivity);
+    }
+
+    public List<ActivityResponse> getAllActivities() {
+        List<Activity> activities = activityRepository.findAll();
+
+        return activities.stream()
+                .map(this::toResponse)
+                .toList();
+    }
+
+    private void publishActivityEvent(Activity activity) {
+        ActivityEvent event = new ActivityEvent();
+        event.setActivityId(activity.getId());
+        event.setUserId(activity.getUserId());
+        event.setType(activity.getType());
+        event.setDurationInMinutes(activity.getDurationInMinutes());
+        event.setCaloriesBurned(activity.getCaloriesBurned());
+        activityEventProducer.publish(event);
     }
 
     private ActivityResponse toResponse(Activity activity) {

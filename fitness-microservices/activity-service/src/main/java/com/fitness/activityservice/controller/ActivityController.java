@@ -8,6 +8,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
 @RestController
 @RequestMapping("/api/activities")
 @RequiredArgsConstructor
@@ -18,6 +20,12 @@ public class ActivityController {
     @PostMapping
     public ResponseEntity<ActivityResponse> createActivity(@Valid @RequestBody ActivityRequest request) {
         ActivityResponse response = activityService.createActivity(request);
+        return ResponseEntity.ok(response);
+    }
+
+    @GetMapping
+    public ResponseEntity<List<ActivityResponse>> getAllActivities() {
+        List<ActivityResponse> response = activityService.getAllActivities();
         return ResponseEntity.ok(response);
     }
 }

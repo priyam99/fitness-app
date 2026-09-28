@@ -9,6 +9,16 @@ spring:
     mongodb:
       uri: mongodb://localhost:27017/fitness_activity_db
 
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+
+kafka:
+  topic:
+    activity-events: activity-events
+
 eureka:
   client:
     service-url:
