@@ -443,6 +443,97 @@ needed to change config."
 
 ---
 
+## Kafka vs Traditional Message Queues
+
+**Q: Core difference between Kafka and something like RabbitMQ?**
+A: Log-based vs queue-based. A traditional queue removes a message once
+read by one consumer. Kafka keeps messages in an ordered, append-only
+log for a retention period — multiple independent consumers (or
+consumer groups) can each read the same messages at their own pace
+without affecting each other. Kafka is really a distributed log/
+streaming platform usable as a queue, not purely a queue itself.
+
+**Q: Do we need Kafka between Activity Service and User Service too?**
+A: No. Kafka is fire-and-forget with no built-in immediate response —
+wrong tool when the caller needs a definite answer before proceeding
+(user validation). Rule: sync (REST) when the caller must block for an
+answer; async (Kafka) when the work can happen later without blocking
+the caller. Confirmed by the transcript's own framing (Part 2 §25).
+
+---
+
+## Kafka Producer/Consumer — Live Build
+
+**Q: Why a separate `ActivityEvent` class instead of publishing the
+`Activity` document directly to Kafka?**
+A: Same DTO-separation principle as `User` vs `UserResponse`. Publishing
+the raw `Activity` would leak Activity Service's internal storage shape
+as a public contract — any future DB-only field change would silently
+change what AI Service receives. `ActivityEvent` is a deliberately
+minimal, intentional contract with only what AI Service actually needs.
+
+**Q: Why does `ActivityEvent` exist as two separate, near-identical
+classes (one per service) instead of one shared class?**
+A: Real, deliberate tradeoff — no shared Java module between
+independently-deployable services, since a shared library would
+reintroduce coupling (both services would need redeploying together
+when it changes). Verified live: this is exactly what caused a real bug
+(see below) — worth knowing the cost, not just the theory.
+
+**Q: What does `@KafkaListener` actually do, and how is it different
+from a Controller method being called?**
+A: Runs the annotated method automatically whenever a new message
+arrives on the topic — invoked by Spring's Kafka listener machinery in
+a background thread, not by an external caller expecting a response.
+Fire-and-forget from Kafka's side: nothing waits on `consume()`'s
+return value. For N published messages, `consume()` runs N times (no
+batching by default).
+
+**Q: Consumer groups — what does `group-id` actually control?**
+A: If multiple instances of a service share the same `group-id`, Kafka
+splits messages between them (load-shared, each message processed
+once). Different `group-id`s = each group independently receives and
+processes every message in full.
+
+---
+
+## Two Real Bugs Fixed Building the Kafka Pipeline (live-verified)
+
+**Bug 1 — `spring-kafka` vs `spring-boot-starter-kafka`**
+A: activity-service's `pom.xml` used the raw `spring-kafka` library
+instead of the `spring-boot-starter-kafka` starter. The jar was
+genuinely on the classpath, but `KafkaTemplate` still wasn't
+auto-created — `UnsatisfiedDependencyException: No qualifying bean of
+type 'KafkaTemplate'`. Root cause: Spring Boot's auto-configuration
+(the mechanism that reads `application.yml` and creates beans like
+`KafkaTemplate` automatically) is tied to the starter dependency, not
+just the underlying library being present. **Lesson: always prefer the
+`spring-boot-starter-*` variant over the raw library** — starters are
+what plug into Spring Boot's "just works" auto-configuration model.
+(Ruled out stale build/cache first: deleted `target/`, did a clean
+Rebuild Project, same error persisted — confirmed it was a real
+dependency-choice bug, not a caching artifact.)
+
+**Bug 2 — cross-service class-name mismatch breaking deserialization**
+A: `JsonDeserializer` defaults to trusting a class-name "stamp" the
+producer embeds in each message's metadata, then tries to load a class
+with that *exact* name on the consumer side. Since activity-service's
+`ActivityEvent` and ai-service's `ActivityEvent` are separate classes
+in different packages (see above), AI Service tried to load
+`com.fitness.activityservice.event.ActivityEvent` — which doesn't
+exist in its own codebase — and threw `ClassNotFoundException` /
+`RecordDeserializationException` on every message. Fixed with two
+consumer properties: `spring.json.use.type.headers: false` (ignore the
+producer's embedded class name entirely) +
+`spring.json.value.default.type: com.fitness.aiservice.event.ActivityEvent`
+(always decode into this specific local class instead). Live-verified:
+messages that failed earlier and stayed in the Kafka log were
+successfully reprocessed once AI Service restarted with the fix —
+concrete proof Kafka doesn't drop unconsumed/failed messages the way a
+traditional "remove on read" queue might.
+
+---
+
 ## Open / Not Yet Answered
 
 - Why might AI Service specifically benefit from an interface +
