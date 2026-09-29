@@ -534,8 +534,183 @@ traditional "remove on read" queue might.
 
 ---
 
+## Gemini Integration — AI Service
+
+**Q: What is "context" in the context of an LLM call?**
+A: All the information given to the model alongside the instruction, since
+the model has no memory of your app/data between calls — every call is a
+blank slate. Here, `ActivityEvent`'s fields (type, duration, calories) ARE
+the context; the fixed instruction text stays the same every call.
+
+**Q: Why does `GeminiRequest`/`GeminiResponse` exist as typed DTOs instead
+of raw `Map`/`JsonNode`?**
+A: Same DTO-at-every-boundary rule already applied everywhere else in this
+project (Entity<->API, Entity<->Kafka event). Gemini's API is just another
+boundary — typed classes catch shape mistakes at compile time and are
+self-documenting; raw Maps fail silently/at runtime on typos.
+
+**Q: Why are `Content`/`Part` nested static classes inside `GeminiRequest`/
+`GeminiResponse` instead of their own top-level files?**
+A: They only exist to mirror Gemini's JSON shape and have no meaning
+outside their parent DTO — nesting makes that relationship explicit
+instead of cluttering the `dto` package with tiny throwaway classes.
+
+**Q: Why does `GeminiService`'s constructor have to be written manually
+instead of using `@RequiredArgsConstructor`?**
+A: `@RequiredArgsConstructor` can't add per-parameter annotations like
+`@Value`. Since `apiUrl`/`apiKey` are plain `String`s that need
+`@Value("${gemini.api.key}")` to know where to come from, the constructor
+must be written by hand. Rule: `@RequiredArgsConstructor` for plain bean
+injection; manual constructor once any parameter needs `@Value`,
+`@Qualifier`, etc. (`RecommendationService` has no `@Value` params, so it
+DOES use `@RequiredArgsConstructor` — same rule, opposite outcome.)
+
+**Q: Why introduce `RecommendationService` instead of having
+`ActivityEventConsumer` call `GeminiService` + `RecommendationRepository`
+directly?**
+A: Same layering already used in Activity Service: `ActivityController`
+doesn't touch `ActivityRepository`/`UserValidationService`/
+`ActivityEventProducer` directly — it calls one thing,
+`ActivityService.createActivity()`, which orchestrates. Consumer/Controller
+= thin entry point; Service = orchestration logic. Keeps
+`ActivityEventConsumer` doing exactly one job: receive from Kafka, delegate.
+
+**Q: If `application-local.yml` defines a key (`gemini.api.key`) that
+doesn't exist anywhere in the base `application.yml`, does that work?**
+A: Yes. Spring doesn't override key-by-key requiring prior existence in
+the base file — it merges all active property sources into one combined
+map. A profile-specific file can introduce brand-new keys from scratch;
+nothing needs to "already be there" to be added.
+
+**Q: What is a Dead Letter Topic (DLT), and do we have one?**
+A: A separate Kafka topic that permanently-failing messages get moved to
+after retries are exhausted, instead of being silently dropped after
+just a log line. We do NOT have one configured yet — known, stated gap,
+not a bug. Currently: a message that keeps failing (e.g. bad Gemini API
+key) retries a few times via Spring Kafka's default error handler, then
+is logged and effectively lost. The app itself does not crash — Kafka
+consumer failures are isolated per-message, not fatal to the service.
+
+---
+
+## Live Bug — Eureka Hostname Resolution (`Priyam.mshome.net`)
+
+**Q: What went wrong?**
+A: Every service registers with Eureka using its machine's network hostname
+by default — on Windows this can be a local-network name like
+`Priyam.mshome.net`, not a real resolvable address. When API Gateway tried
+to route a request to Activity Service via `lb://activity-service`, Eureka
+handed back that hostname, and Gateway's connection attempt failed with
+`UnknownHostException` — the hostname isn't resolvable outside the local
+machine's own network naming.
+
+**Q: Why did other services (e.g. User Service) seem unaffected?**
+A: They weren't actually immune — the bug only shows up on calls that go
+*through* Eureka's registry lookup (like Gateway resolving `lb://...`, or
+one service discovering another via `DiscoveryClient`). Direct calls
+straight to a service's own port (e.g. Postman hitting `localhost:8081`
+directly) never touch Eureka's registered hostname at all, so those always
+worked regardless. Activity Service was simply the first place this
+particular path got tested.
+
+**Q: How was it fixed, and why does it work?**
+A: Added `eureka.instance.prefer-ip-address: true` to every service
+(User, Activity, AI, Gateway — not Eureka Server itself, which never
+registers as a client). This tells each service to register its real IP
+address with Eureka instead of its hostname. IP addresses need no DNS
+resolution step to connect to, so the lookup can't fail the same way.
+
+**Q: Debugging lesson?**
+A: A fast (~10ms) 500 with an empty/generic error body is a strong signal
+the request never reached the target service's own code at all — check
+the layer *in front of* the target (here, the Gateway) before assuming the
+bug is in the destination service's logic. Confirmed by tracing: Eureka's
+dashboard showed all 4 services correctly registered (ruling out a
+registration failure) — the actual failure was one specific step later,
+at final TCP connection time, not at service-discovery lookup time.
+
+---
+
+## Live Bug — Silent Wrong-Database Writes (`spring.data.mongodb.uri` deprecated)
+
+**Q: What went wrong?**
+A: Both Activity Service and AI Service used `spring.data.mongodb.uri` to
+set the Mongo connection string, including the target database name
+(`fitness_activity_db` / `fitness_ai_db`). In Spring Boot 4.1.1, this
+property is deprecated in favor of `spring.mongodb.uri` (one level less
+nested — no `data:` prefix). The IDE flagged this as a deprecation warning
+early on, but it was dismissed as non-urgent at the time.
+
+**Q: What did the deprecated property actually do — did it fail loudly?**
+A: No — that was the dangerous part. It connected successfully (no error,
+no crash) but silently ignored the database name from the URI, falling
+back to MongoDB's own default database, `test`. Every save appeared to
+work fine in the application logs (`"Saved recommendation for activity
+..."` printed correctly), but the data was landing in the wrong database
+the entire time.
+
+**Q: How was it caught?**
+A: Verified successful Kafka->Gemini->save flow via console logs, then
+independently queried MongoDB directly (`fitness_ai_db.recommendations`)
+to confirm the save — found it empty despite the success log. Checked
+`admin.listDatabases` and found `fitness_ai_db` didn't exist as a
+database at all; only Mongo's default `test` database did, and it held
+the missing documents. Cross-checked Activity Service the same way and
+found the identical bug had been present since the service was first
+built — 12 activities silently saved to `test` instead of
+`fitness_activity_db`.
+
+**Q: The fix, and the lesson?**
+A: Changed `spring.data.mongodb.uri` -> `spring.mongodb.uri` in both
+services' `application.yml`. Lesson: a deprecation warning that doesn't
+outright break startup can still cause a silent correctness bug — the
+app "working" (no exceptions, no crashes, success logs) is not the same
+as the app being *correct*. Success logs only prove the code path ran
+without throwing; they don't prove the data landed where intended.
+Independently verifying state in the actual database (not just trusting
+application logs) is what caught this.
+
+---
+
+## Swapping AI Providers — Gemini to Grok Attempt (live-verified, then reverted)
+
+**Q: This directly answers the earlier deferred question — why would AI
+Service benefit from an interface + multiple implementations for its AI
+provider?**
+A: Confirmed hands-on: swapping Gemini for Grok only required changing
+`GeminiService` (URL, auth header, request/response DTOs to match Grok's
+OpenAI-style `messages`/`choices` shape) and the one line in
+`RecommendationService` that references it. Everything else — the
+`Recommendation` model, `RecommendationRepository`,
+`ActivityEventConsumer`, the Kafka pipeline — needed zero changes,
+because they only ever depended on one method:
+`getRecommendation(ActivityEvent)`. An interface (`AiProvider`) would
+formalize this further, but even without one, the existing layering
+already isolated the blast radius of a provider swap to a single class.
+
+**Q: Why did the Grok attempt fail, and was it a code bug?**
+A: No — the code was correct end-to-end. Request reached Grok's API,
+authenticated successfully (`403`, not `401` — proves the API key was
+valid), and failed only because xAI requires purchased credits/billing
+on the account before any request succeeds, even a test call. Unlike
+Gemini, there's no free tier. Reverted to Gemini (which does have a free
+tier) to keep the project runnable without spending money; Grok's
+integration code was removed rather than left dead/unused in the
+codebase (`GeminiService`/`GeminiRequest`/`GeminiResponse` restored,
+`GrokService`/`GrokRequest`/`GrokResponse` deleted).
+
+**Q: What's the interview-ready way to talk about this?**
+A: "I actually built and tested a provider swap (Gemini to Grok) to
+validate the architecture supports it — confirmed the auth and request
+flow worked correctly, but xAI requires paid credits with no free tier,
+so I reverted to Gemini for a runnable demo. The swap itself only
+touched one service class and its DTOs; nothing else in the pipeline
+needed to change." Real, hands-on evidence beats describing the pattern
+hypothetically.
+
+---
+
 ## Open / Not Yet Answered
 
-- Why might AI Service specifically benefit from an interface +
-  multiple implementations later (e.g. swapping Gemini for another
-  model)? — seeded, not yet resolved.
+- Add a Dead Letter Topic for AI Service's Kafka consumer — noted gap,
+  not yet implemented.

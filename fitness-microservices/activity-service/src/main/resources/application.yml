@@ -5,9 +5,8 @@ spring:
   application:
     name: activity-service
 
-  data:
-    mongodb:
-      uri: mongodb://localhost:27017/fitness_activity_db
+  mongodb:
+    uri: mongodb://localhost:27017/fitness_activity_db
 
   kafka:
     bootstrap-servers: localhost:9092
@@ -20,6 +19,8 @@ kafka:
     activity-events: activity-events
 
 eureka:
+  instance:
+    prefer-ip-address: true
   client:
     service-url:
       defaultZone: http://localhost:8761/eureka/

@@ -5,9 +5,11 @@ spring:
   application:
     name: ai-service
 
-  data:
-    mongodb:
-      uri: mongodb://localhost:27017/fitness_ai_db
+  profiles:
+    active: local
+
+  mongodb:
+    uri: mongodb://localhost:27017/fitness_ai_db
 
   kafka:
     bootstrap-servers: localhost:9092
@@ -24,7 +26,13 @@ kafka:
   topic:
     activity-events: activity-events
 
+gemini:
+  api:
+    url: https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent
+
 eureka:
+  instance:
+    prefer-ip-address: true
   client:
     service-url:
       defaultZone: http://localhost:8761/eureka/
