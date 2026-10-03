@@ -22,6 +22,12 @@ spring:
               predicates:
                 - Path=/api/activities/**
 
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:8180/realms/fitness-app
+
 eureka:
   instance:
     prefer-ip-address: true

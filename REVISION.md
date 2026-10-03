@@ -710,6 +710,169 @@ hypothetically.
 
 ---
 
+## File-by-File Reference (one-line purpose per file)
+
+### User Service
+- `UserServiceApplication.java` — starts the app, tells Spring where to scan for components
+- `model/User.java` — maps a Java object to a row in the `users` PostgreSQL table
+- `repository/UserRepository.java` — lets you save/find users without writing SQL
+- `dto/RegisterRequest.java` — shape of the JSON a client sends to register
+- `dto/UserResponse.java` — shape of the JSON sent back (no password)
+- `service/UserService.java` — actual business logic: register, get by id, get all
+- `controller/UserController.java` — defines the HTTP endpoints (`/api/users/...`)
+- `exception/UserNotFoundException.java` — thrown when a user id doesn't exist
+- `exception/EmailAlreadyExistsException.java` — thrown when registering a duplicate email
+- `exception/GlobalExceptionHandler.java` — turns exceptions into proper HTTP error responses
+
+### Activity Service
+- `ActivityServiceApplication.java` — starts the app
+- `model/Activity.java` — maps a Java object to a document in MongoDB
+- `repository/ActivityRepository.java` — save/find activities in MongoDB
+- `dto/ActivityRequest.java` — shape of incoming "log an activity" JSON
+- `dto/ActivityResponse.java` — shape of the response sent back
+- `service/ActivityService.java` — validates user, saves activity, fires Kafka event
+- `service/UserValidationService.java` — checks with User Service that a userId is real
+- `controller/ActivityController.java` — defines the HTTP endpoints
+- `config/RestClientConfig.java` — provides the HTTP client used to call User Service
+- `event/ActivityEvent.java` — shape of the message sent to Kafka
+- `event/ActivityEventProducer.java` — actually sends that message to Kafka
+- `exception/UserNotFoundException.java` — thrown if the user doesn't exist
+- `exception/GlobalExceptionHandler.java` — turns exceptions into HTTP error responses
+
+### Eureka Server
+- `EurekaServerApplication.java` — runs the service registry every other service registers with
+
+### API Gateway
+- `ApiGatewayApplication.java` — starts the single entry point that routes requests to the right service (routing rules live in `application.yml`)
+- `config/SecurityConfig.java` — requires a valid JWT on every request except `/api/users/register`; validates tokens against Keycloak
+
+### AI Service
+- `AiServiceApplication.java` — starts the app
+- `model/Recommendation.java` — maps a Java object to a document in MongoDB
+- `repository/RecommendationRepository.java` — save/find recommendations in MongoDB
+- `event/ActivityEvent.java` — shape of the message received from Kafka (separate copy from Activity Service's)
+- `event/ActivityEventConsumer.java` — listens for new Kafka messages and reacts
+- `service/RecommendationService.java` — coordinates calling Gemini and saving the result
+- `service/GeminiService.java` — actually talks to Gemini's API
+- `dto/GeminiRequest.java` — shape of what we send to Gemini
+- `dto/GeminiResponse.java` — shape of what Gemini sends back
+- `config/RestClientConfig.java` — provides the HTTP client used to call Gemini
+
+---
+
+## Keycloak — Authentication at the Gateway
+
+**Q: What problem does this solve that we didn't have before?**
+A: Before this, the Gateway forwarded every request to every service with
+zero identity checking — anyone could call `/api/activities` as any
+`userId` they typed in, with no proof of who they actually were. Keycloak
+adds a real identity layer: a client must present a cryptographically
+signed token proving who the request is acting on behalf of before the
+Gateway lets it through.
+
+**Q: What is a realm, a client, and a user — and how do they relate?**
+A: A **realm** (`fitness-app`) is an isolated tenant inside Keycloak — its
+own users, clients, and tokens, walled off from other realms (e.g.
+Keycloak's own internal `master` realm). A **client** (`fitness-app-client`)
+represents the *application* asking for tokens — our API Gateway. A
+**user** (`tester2`) is the actual person logging in. Getting a token
+requires proving both: the client is legitimate (client ID + client
+secret) and the user is legitimate (username + password). Analogy: a
+security desk issuing a visitor badge — the user is the visitor, the
+client is the department vouching for/requesting the badge on their
+behalf.
+
+**Q: Public vs confidential client — which did we use and why?**
+A: Confidential (Client authentication = On). A public client (e.g. a
+browser SPA) can't safely hold a secret since its code is visible to
+anyone. A confidential client is a backend/server component that can
+securely store a secret — that's the Gateway. We also enabled **Direct
+access grants**, which allows fetching a token with a raw username+password
+POST (no browser redirect) — useful for testing via Postman before wiring
+up a real login UI.
+
+**Q: What actually happens when a client requests a token?**
+A: POST to Keycloak's token endpoint
+(`/realms/fitness-app/protocol/openid-connect/token`) with `grant_type`,
+`client_id`, `client_secret`, `username`, `password` as
+`x-www-form-urlencoded` body fields. Keycloak checks the client secret
+(proves the caller really is `fitness-app-client`) and the user's
+credentials (proves it's really that user), then returns a signed JWT
+**access_token** (short-lived, 5 min here) plus a **refresh_token**
+(longer-lived, used to get a new access token without re-entering a
+password).
+
+**Q: Is a JWT encrypted?**
+A: No — signed, not encrypted. The payload (header.payload.signature) is
+plain base64, readable by anyone who intercepts it (confirmed by decoding
+a real token at jwt.io and seeing `preferred_username`, `email`, `exp`,
+`iss` in plain text). What prevents forgery is the **signature**: Keycloak
+signs with a private key only it holds; the Gateway verifies using
+Keycloak's public key. Anyone can read a JWT's claims, but nobody except
+Keycloak can produce a signature that verifies correctly.
+
+**Q: How does the Gateway verify a token without calling Keycloak on every
+single request?**
+A: `spring-boot-starter-oauth2-resource-server` + one config value —
+`issuer-uri: http://localhost:8180/realms/fitness-app`. On startup, Spring
+calls that URL, discovers Keycloak's public key endpoint, and caches the
+keys. After that, verifying a token's signature is a local cryptographic
+check — no network call to Keycloak per request.
+
+**Q: Why does adding the resource-server dependency break registration?**
+A: The moment that dependency is on the classpath, Spring Security
+auto-locks every endpoint by default, requiring a valid token for all of
+them — including `/api/users/register`. But a brand-new user has no
+account yet, so they can't have a token yet either. Fixed with an explicit
+`SecurityConfig`: `permitAll()` for `/api/users/register`,
+`authenticated()` for everything else.
+
+**Q: Why `SecurityWebFilterChain` instead of the more commonly-documented
+`SecurityFilterChain`?**
+A: The Gateway is built on Spring Cloud Gateway's WebFlux
+(reactive/non-blocking) stack, not a traditional servlet stack.
+`@EnableWebFluxSecurity` + `SecurityWebFilterChain` is the reactive-stack
+equivalent — using the servlet-based types here wouldn't compile/wire
+correctly against a WebFlux app.
+
+**Q: Why disable CSRF protection in SecurityConfig?**
+A: CSRF protection defends cookie/session-based browser apps. This
+Gateway is a stateless API authenticated via a `Bearer` token in a
+header, not cookies — CSRF doesn't apply, and leaving it on would
+actually block legitimate API calls (Postman, the real frontend) that
+don't carry a CSRF token.
+
+### Live Bug — "Account is not fully set up" (invalid_grant)
+
+**What went wrong:** Requesting a token via Postman for a freshly created
+Keycloak user consistently failed with `400 invalid_grant: "Account is
+not fully set up"` — even after resetting the password, confirming
+"Temporary" was off, checking the user's "Required user actions" field
+was empty, and deleting/recreating the user entirely from scratch.
+
+**How it was actually diagnosed:** Rather than keep guessing at the
+direct-grant API path, tested the *same* username/password through
+Keycloak's own browser login page
+(`/realms/fitness-app/account`). That immediately revealed the real
+cause: Keycloak's realm-level **User Profile** config marks `email`,
+`firstName`, `lastName` as required fields. A user missing them is
+blocked from completing login — the direct-grant (password) flow surfaces
+this as the generic `invalid_grant` / "Account is not fully set up"
+error instead of a clearer message, because the password grant can't
+redirect to a "complete your profile" form the way the browser flow can.
+
+**Fix:** Filled in email/first name/last name for the user via the forced
+"Update Account Information" screen in the browser flow. Afterward, the
+exact same Postman request (same client, same password) succeeded and
+returned a real access/refresh token.
+
+**Lesson:** When an API-level auth error is vague, test the same
+credentials through the provider's own UI/browser flow if one exists —
+it often surfaces the real validation failure with a human-readable
+message that the API path only returns as a generic error code.
+
+---
+
 ## Open / Not Yet Answered
 
 - Add a Dead Letter Topic for AI Service's Kafka consumer — noted gap,
