@@ -12,6 +12,7 @@ export function AuthProvider({ children }) {
     const claims = decodeToken(data.access_token);
 
     localStorage.setItem("access_token", data.access_token);
+    localStorage.setItem("refresh_token", data.refresh_token);
     localStorage.setItem("user_id", claims.sub);
 
     setToken(data.access_token);
@@ -20,6 +21,7 @@ export function AuthProvider({ children }) {
 
   function logout() {
     localStorage.removeItem("access_token");
+    localStorage.removeItem("refresh_token");
     localStorage.removeItem("user_id");
     setToken(null);
     setUserId(null);
