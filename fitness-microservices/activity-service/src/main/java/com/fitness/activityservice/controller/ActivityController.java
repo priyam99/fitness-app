@@ -28,4 +28,10 @@ public class ActivityController {
         List<ActivityResponse> response = activityService.getAllActivities();
         return ResponseEntity.ok(response);
     }
+
+    @GetMapping("/user/{userId}")
+    public ResponseEntity<List<ActivityResponse>> getActivitiesByUserId(@PathVariable String userId) {
+        List<ActivityResponse> response = activityService.getActivitiesByUserId(userId);
+        return ResponseEntity.ok(response);
+    }
 }

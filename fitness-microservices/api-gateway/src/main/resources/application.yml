@@ -21,6 +21,10 @@ spring:
               uri: lb://activity-service
               predicates:
                 - Path=/api/activities/**
+            - id: ai-service
+              uri: lb://ai-service
+              predicates:
+                - Path=/api/recommendations/**
 
   security:
     oauth2:

@@ -171,6 +171,20 @@ A: No — data persists. Stopping is like powering off a computer; the
 container's storage stays intact. Data is only lost if the container
 itself is deleted (`docker rm`) without a volume backing it.
 
+**After a laptop restart — startup checklist:**
+1. Open Docker Desktop manually (Windows key → "Docker Desktop" → Enter).
+   There's no reliable terminal command to launch the Docker Desktop GUI
+   itself on Windows — wait ~20-40s for the whale icon in the system tray
+   to stop animating before running any `docker` command.
+2. Start the three infra containers (they already exist, just stopped):
+   ```
+   docker start mongodb kafka keycloak
+   ```
+3. Start Spring Boot services in order, ~10-15s apart: Eureka Server →
+   User Service → Activity Service → API Gateway → AI Service.
+4. Start the frontend dev server: `cd fitness-microservices/frontend && npm run dev`
+   (serves at `http://localhost:5173`).
+
 ---
 
 ## Secrets / Environment Variables
@@ -873,7 +887,86 @@ message that the API path only returns as a generic error code.
 
 ---
 
+## React Frontend — Connecting the UI to the Backend
+
+**Q: Registration creates a Postgres row via User Service — does that
+automatically create a Keycloak login too?**
+A: No, not by default. User Service's `/register` and Keycloak are two
+separate systems. Fixed by adding `KeycloakUserService` to User Service:
+after saving the Postgres row, it fetches a Keycloak **admin token**
+(`admin-cli` client, `master` realm) and calls Keycloak's **Admin REST
+API** (`POST /admin/realms/fitness-app/users`) to create a matching
+Keycloak user with the same email/password. The admin call happens
+server-side in User Service, never in the browser — admin credentials
+must never reach frontend JS.
+
+**Q: What ID does the frontend use to identify "the current user," and
+why did that break Activity Service?**
+A: After login, the frontend only has the JWT's `sub` claim — Keycloak's
+UUID. But Activity Service's `UserValidationService` was calling
+`GET /api/users/{id}` with a `Long` (User Service's own Postgres
+auto-increment ID). Sending a UUID into a `Long` parameter caused a 400.
+Fixed by adding a `keycloakId` column to the `User` entity (populated
+from the `Location` header Keycloak returns on user creation), a
+`findByKeycloakId` repository method, and a new endpoint
+`GET /api/users/by-keycloak-id/{keycloakId}` that `UserValidationService`
+calls instead. This makes Keycloak's UUID the one identity that flows
+through every service — the standard pattern when an external IdP is
+involved: each service's own primary key stays internal, but a
+foreign-key-style column links it back to the IdP's ID.
+
+**Q: Why did a already-correct `permitAll()` rule on `/api/users/register`
+still return 401 from the browser, while curl and Postman succeeded?**
+A: A stale `access_token` was sitting in `localStorage` from an earlier
+login, and the axios interceptor attached it to every request — including
+registration, which must stay anonymous. An expired/invalid
+`Authorization` header on an OAuth2-resource-server-protected app can
+cause Spring Security to reject the request before `permitAll()` is even
+evaluated, depending on filter ordering. curl/Postman never sent that
+header, so they never hit it. Fixed by excluding `/api/users/register`
+specifically in the interceptor, so it's never sent a token regardless of
+what's in storage.
+
+**Q: `GET /api/activities` showed every user's activities to every logged-
+in user — why, and how was it fixed?**
+A: The endpoint was built before login/auth existed, so it was written as
+"return everything" with no concept of "the current user." Nobody updated
+it once real users and the frontend arrived. Fixed by adding
+`findByUserId` to `ActivityRepository`, a `getActivitiesByUserId` service
+method, and a new `GET /api/activities/user/{userId}` endpoint — the
+Dashboard now calls that instead, passing the JWT's `sub` claim.
+
+**Q: Why did a write (`POST /api/activities`) keep succeeding throughout
+all of this, while reads (`GET`) kept breaking?**
+A: Two unrelated bugs, both on the read side only — the missing
+`userId` filter, then briefly a stale service process that hadn't picked
+up the new route. The POST path was never touched by either bug, so every
+activity was saved to MongoDB correctly and immediately, the entire time.
+Interview-ready framing: "writes succeeded and persisted the whole time;
+it was the read path that had bugs" — a meaningfully different, less
+severe class of failure than actual data loss.
+
+**Q: Where does the AI recommendation actually come from in the UI, and
+why didn't it show up immediately?**
+A: AI Service was never wired to any HTTP endpoint before — it only
+consumed Kafka events and saved `Recommendation` documents to MongoDB.
+Added a `RecommendationController` (`GET
+/api/recommendations/activity/{activityId}`, 404 if not generated yet)
+and a new Gateway route (`/api/recommendations/** -> ai-service`, missing
+until now). `ActivityItem.jsx` independently fetches its own
+recommendation per activity and silently shows nothing on 404, since "not
+generated yet" is a normal, expected state — Gemini's response arrives
+asynchronously, seconds after the activity itself is created.
+
+---
+
 ## Open / Not Yet Answered
 
 - Add a Dead Letter Topic for AI Service's Kafka consumer — noted gap,
   not yet implemented.
+- Markdown from Gemini's response renders as raw text (`###`, `**bold**`)
+  in the Dashboard instead of formatted output — not yet fixed.
+- `/api/activities` (the original, unfiltered endpoint) still exists
+  alongside the new `/api/activities/user/{userId}` one — kept rather
+  than removed, in case anything else depends on it, but nothing in the
+  frontend uses it anymore.

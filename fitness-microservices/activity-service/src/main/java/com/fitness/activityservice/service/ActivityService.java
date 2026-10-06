@@ -49,6 +49,14 @@ public class ActivityService {
                 .toList();
     }
 
+    public List<ActivityResponse> getActivitiesByUserId(String userId) {
+        List<Activity> activities = activityRepository.findByUserId(userId);
+
+        return activities.stream()
+                .map(this::toResponse)
+                .toList();
+    }
+
     private void publishActivityEvent(Activity activity) {
         ActivityEvent event = new ActivityEvent();
         event.setActivityId(activity.getId());

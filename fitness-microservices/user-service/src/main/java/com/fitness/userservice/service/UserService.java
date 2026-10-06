@@ -16,6 +16,7 @@ import java.util.List;
 public class UserService {
 
     private final UserRepository userRepository;
+    private final KeycloakUserService keycloakUserService;
 
     public UserResponse register(RegisterRequest request) {
 
@@ -31,12 +32,23 @@ public class UserService {
 
         User savedUser = userRepository.save(user);
 
+        String keycloakId = keycloakUserService.createUser(request);
+        savedUser.setKeycloakId(keycloakId);
+        savedUser = userRepository.save(savedUser);
+
         return toResponse(savedUser);
     }
 
     public UserResponse getUserById(Long id) {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new UserNotFoundException("User not found with id: " + id));
+
+        return toResponse(user);
+    }
+
+    public UserResponse getUserByKeycloakId(String keycloakId) {
+        User user = userRepository.findByKeycloakId(keycloakId)
+                .orElseThrow(() -> new UserNotFoundException("User not found with keycloakId: " + keycloakId));
 
         return toResponse(user);
     }

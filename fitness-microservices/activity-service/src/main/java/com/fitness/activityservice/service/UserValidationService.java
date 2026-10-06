@@ -27,7 +27,7 @@ public class UserValidationService {
 
         try {
             restClient.get()
-                    .uri(baseUrl + "/api/users/{id}", userId)
+                    .uri(baseUrl + "/api/users/by-keycloak-id/{id}", userId)
                     .retrieve()
                     .toBodilessEntity();
             return true;

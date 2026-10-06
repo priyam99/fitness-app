@@ -29,6 +29,12 @@ public class UserController {
         return ResponseEntity.ok(response);
     }
 
+    @GetMapping("/by-keycloak-id/{keycloakId}")
+    public ResponseEntity<UserResponse> getUserByKeycloakId(@PathVariable String keycloakId) {
+        UserResponse response = userService.getUserByKeycloakId(keycloakId);
+        return ResponseEntity.ok(response);
+    }
+
     @GetMapping
     public ResponseEntity<List<UserResponse>> getAllUsers() {
         List<UserResponse> response = userService.getAllUsers();
